@@ -12,10 +12,10 @@ Connect clients (in new window):
         - PORT is default 5001
 
 Example flow:
-    0. start server - python2 challenge.py
-    1. nc localhost 5001 on 2 different terminal windows to connect 2 clients
-    2. rpm start @opponent
-    3. accept @user - from other terminal window
+    0. start server - `python2 challenge.py`
+    1. `nc localhost 5001` on 2 different terminal windows to connect 2 clients
+    2. `rps start @opponent`
+    3. `accept @user` - from other terminal window
     4. start playing!
 
     Try out many games at once in parallel!
