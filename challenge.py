@@ -4,9 +4,8 @@ There is a match-making system that allows you to play against other users.
 Each client connects to the server by loggging in via netcat.
 
 Start up server:
-    python2 challenge.py
-        - must be python 2 for now, sockets lib is easier to work with there
-        - otherwise you hvae to encode/decode bytes
+    python challenge.py
+        - anything python >= 2.7,3 supported
 
 Connect clients (in new window):
     nc localhost PORT
@@ -56,8 +55,13 @@ class Client(object):
         self.nick = None
         self.sock = sock
 
+    def send(self, line, sock=None):
+        if not sock:
+            sock = self.sock
+        sock.sendall(line.encode('utf-8'))
+
     def connect(self):
-        self.sock.sendall('Welcome to the RPS server! What is your nickname?\n')
+        self.send('Welcome to the RPS server! What is your nickname?\n')
 
         self.login()
 
@@ -81,19 +85,18 @@ class Client(object):
             if not data:
                 return
 
-            self.nick = data.strip()
+            self.nick = data.decode('utf-8').strip()
             if self.nick in CONNS or not self.nick.isalnum() or \
                len(self.nick) > 20 or len(self.nick) == 0:
-                self.sock.sendall("'%s' is taken/invalid. "
-                                  "Please pick another name\n" %
-                                  self.nick)
+                self.send("'%s' is taken/invalid. "
+                          "Please pick another name\n" % self.nick)
                 continue
 
             num_users = len(CONNS.keys())
             users = "[" + ", ".join(CONNS.keys()) + "]"
-            self.sock.sendall('You are connected with %d other users: %s \n' %
-                              (num_users, users))
-            self.sock.sendall("To start a game, enter 'rps start @user' \n")
+            self.send('You are connected with %d other users: %s \n' %
+                      (num_users, users))
+            self.send("To start a game, enter 'rps start @user' \n")
 
             # add nick to sockets map
             CONNS[self.nick] = self.sock
@@ -103,7 +106,7 @@ class Client(object):
                 if name == self.nick:
                     continue
 
-                s.sendall(line)
+                self.send(line, s)
 
             # we've sucessfully initialized a client. return
             return
@@ -116,7 +119,7 @@ class Client(object):
             if name == self.nick:
                 continue
 
-            s.sendall(line)
+            self.send(line, s)
 
         del CONNS[self.nick]
         self.sock.close()
@@ -130,11 +133,13 @@ class Client(object):
 
             line = '%s <%s> %s \n' % (self.get_curr_time(),
                                       self.nick,
-                                      data.strip())
+                                      data.decode('utf-8').strip())
 
             # Check if we are going to 'accept' an incoming request
             opponent = self.accept_request(line)
-            if opponent is not None:
+            if opponent is INVALID_OP:
+                continue
+            elif opponent is not None:
                 self.game_init(opponent)
                 continue
 
@@ -150,7 +155,7 @@ class Client(object):
                 if name == self.nick:
                     continue
 
-                s.sendall(line)
+                self.send(line, s)
 
     def accept_request(self, line):
         """
@@ -163,9 +168,18 @@ class Client(object):
 
         opponent = set(re.findall("@([a-zA-Z0-9]{1,20})", line))
         if len(opponent) > 1:
-            return None
+            self.send("> Only one opponent allowed.\n")
+            return INVALID_OP
 
         opponent = list(opponent)[0]
+        if opponent not in CONNS:
+            self.send("> <%s> is not online.\n" % opponent)
+            return INVALID_OP
+
+        if opponent == self.nick:
+            self.send("> You can't accept a game against yourself. \n")
+            return INVALID_OP
+
         return opponent
 
     def send_game_request(self, line):
@@ -187,20 +201,20 @@ class Client(object):
         """
         opponent = set(re.findall("@([a-zA-Z0-9]{1,20})", line))
         if len(opponent) > 1:
-            self.sock.sendall("> Pick only one opponent.\n")
+            self.send("> Pick only one opponent.\n")
             return INVALID_OP
 
         opponent = list(opponent)[0]
         if opponent not in CONNS:
-            self.sock.sendall("> <%s> is not online.\n" % opponent)
+            self.send("> <%s> is not online.\n" % opponent)
             return INVALID_OP
 
         if opponent == self.nick:
-            self.sock.sendall("> You can't start a game against yourself. \n")
+            self.send("> You can't start a game against yourself. \n")
             return INVALID_OP
 
         if opponent in IN_GAME:
-            self.sock.sendall("> <%s> is already in-game.\n" % opponent)
+            self.send("> <%s> is already in-game.\n" % opponent)
             return INVALID_OP
 
         """
@@ -209,9 +223,9 @@ class Client(object):
             - request will timeout after a certain period of time
         """
         opponent_sock = CONNS[opponent]
-        opponent_sock.sendall("> <%s> has sent you a game request. "
-                              "Type 'accept @%s' to join.  \n" %
-                              (self.nick, self.nick))
+        self.send("> <%s> has sent you a game request. "
+                  "Type 'accept @%s' to join.  \n" %
+                  (self.nick, self.nick), opponent_sock)
 
         return opponent
 
@@ -239,20 +253,20 @@ class Client(object):
             del MATCH_LOCKS[gameid]
 
     def wait_for_opponent(self, opponent, timeout=10):
-        self.sock.sendall("> Waiting for opponent to join... \n")
+        self.send("> Waiting for opponent to join... \n")
         while opponent not in IN_GAME and timeout > 0:
             time.sleep(1)
             timeout -= 1
 
         if timeout == 0:
-            self.sock.sendall("> Opponent hasn't joined. \n")
+            self.send("> Opponent hasn't joined. Returning to chat. \n")
             return False
 
         return True
 
     def send_opponent_missing(self):
-        self.sock.sendall("> Opponent seems to have gone idle/away. "
-                          "Returning to chat. \n")
+        self.send("> Opponent seems to have gone idle/away. "
+                  "Returning to chat. \n")
         return
 
     def game_run(self, gameid, opponent, timeout=10):
@@ -262,7 +276,7 @@ class Client(object):
         if not self.wait_for_opponent(opponent):
             return
 
-        self.sock.sendall("> Welcome to RPS! Choose one of [ROCK, PAPER, SCISSORS]. \n")
+        self.send("> Welcome to RPS! Choose one of [ROCK, PAPER, SCISSORS]. \n")
 
         while True:
             data = self.sock.recv(1024)
@@ -273,10 +287,10 @@ class Client(object):
                 self.send_opponent_missing()
                 return
 
-            move = data.strip()
+            move = data.decode('utf-8').strip()
             if move.upper() not in MOVES:
-                self.sock.sendall("> Invalid Move. Possible commands are "
-                                  "[ROCK, PAPER, SCISSORS] \n")
+                self.send("> Invalid Move. Possible commands are "
+                          "[ROCK, PAPER, SCISSORS] \n")
                 continue
 
             MATCHES[gameid][self.nick] = move
@@ -303,11 +317,11 @@ class Client(object):
                                       opponent, MATCHES[gameid][opponent])
 
             if winner is None:
-                self.sock.sendall("> It was a tie! \n")
-                IN_GAME[opponent].sendall("> It was a tie! \n")
+                self.send("> It was a tie! \n")
+                self.send("> It was a tie! \n", IN_GAME[opponent])
             else:
-                self.sock.sendall("> Winner was <%s>! \n" % winner)
-                IN_GAME[opponent].sendall("> Winner was <%s>! \n" % winner)
+                self.send("> Winner was <%s>! \n" % winner)
+                self.send("> Winner was <%s>! \n" % winner, IN_GAME[opponent])
 
             # remove so next thread doesn't enter critical section
             del MATCHES[gameid]
@@ -317,10 +331,10 @@ class Client(object):
 
         p1_move = p1_move.upper()
         p2_move = p2_move.upper()
-        IN_GAME[self.nick].sendall("> You chose to play %s \n" % (p1_move))
-        IN_GAME[self.nick].sendall("> <%s> chose to play %s \n" % (p2, p2_move))
-        IN_GAME[p2].sendall("> You chose to play %s \n" % (p2_move))
-        IN_GAME[p2].sendall("> <%s> chose to play %s \n" % (p1, p1_move))
+        self.send("> You chose to play %s \n" % (p1_move), IN_GAME[self.nick])
+        self.send("> <%s> chose to play %s \n" % (p2, p2_move), IN_GAME[self.nick])
+        self.send("> You chose to play %s \n" % (p2_move), IN_GAME[p2])
+        self.send("> <%s> chose to play %s \n" % (p1, p1_move), IN_GAME[p2])
 
         if p1_move == "ROCK" and p2_move == "SCISSORS":
             return p1
